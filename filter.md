@@ -1,6 +1,6 @@
 # net/core/filter.c
 
-## bpf_prog_create(struct bpf_prog **pfp, struct sock_fprog_kern *fprog);
+## 1. bpf_prog_create(struct bpf_prog **pfp, struct sock_fprog_kern *fprog);
 
 ### 入参：
 
@@ -40,21 +40,52 @@ struct sock_filter {
 
 ### 实现：
 
-计算所需空间，调用bpf_prog_alloc，返回指针
+1. 计算所需空间，调用bpf_prog_alloc，返回指针。
 
-复制filter中信息到新分配的bpf_prog中
+2. 复制filter中信息到新分配的bpf_prog中。
 
-调用bpf_prepare_filter，检查程序合法性（无越界指针，非法指令，以ret结尾），调用bpf_migrate_filter，复制原cBPF程序到栈，第一次调用bpf_convert_filter计算新eBPF程序长度，调用bpf_prog_realloc重新分配prog空间，第二次调用bpf_convert_filter，将原cBPF程序转换成eBPF存入bpf_prog，最后进入bpf_prog_select_runtime，通过bpf_prog_select_func根据新的eBPF程序的栈深度选择不同的解释器以供jit无效时使用，接下来尝试jit，通过bpf_prog_alloc_jited_linfo分配额外jit所需内存放在aux下。创建bpf程序完毕。
+3. 调用bpf_prepare_filter。
+	1. 检查cBPF程序合法性（无越界指针，非法指令，以ret结尾）。
+	2. 尝试bpf_jit_compile该bpf程序（事实上并不作任何事情）。
+	3. 如果无法jit编译该bpf程序，调用bpf_migrate_filter，复制原cBPF程序到栈。
+		1. 备份原bpf程序。
+		2. 第一次调用bpf_convert_filter。过一遍原cBPF指令，计算新eBPF程序长度，调用bpf_prog_realloc重新分配prog空间。
+		3. 第二次调用bpf_convert_filter，将原cBPF程序转换成eBPF存入bpf_prog。
+		4. 最后进入bpf_prog_select_runtime。
+			1. 通过bpf_prog_select_func根据新的eBPF程序的栈深度选择不同的解释器以供JIT无效时使用。
+			2. 如果dev_bound，下发BPF程序至smartNIC。
+			3. 如果非dev_bound，尝试JIT。
 
-解释器：共16个，深度分别为32：32：512。解释器栈上分配不同深度的bpf栈和寄存器空间，调用__bpf_prog_run。__bpf_prog_run内含256个BPF指令的列表和256个包含汇编的标签，根据指令跳转至标签，执行汇编，循环直到结束。
+创建BPF程序完毕。
+
+BPF解释器：共16个，深度分别为32：32：512。解释器栈上分配不同深度的BPF栈和寄存器空间，调用__bpf_prog_run。__bpf_prog_run内含256个BPF指令的列表和256个包含汇编的标签，根据指令跳转至标签，执行汇编，循环直到结束。
+
+BPF JIT：
+1. 通过bpf_prog_alloc_jited_linfo分配额外JIT所需内存放在aux下。
+2. bpf_int_jit_compile。
+	1. bpf_jit_blind_contants。
+		1. 克隆bpf_prog。
+		2. bpf_jit_bind_insn，对克隆出来的BPF机器码进行了一系列神奇的随机加密操作。
+		3. bpf_patch_insn_single把修改过的克隆机器码填回原代码。
+	2. do_jit翻译成机器码并精简。循环直到无法精简。保存生成的二进制。
 
 ### 调用地点：
 
-drivers/net/ppp/pppgeneric.c (ppp_ioctl)：cmd为PPPIOCSPASS或PPPIOCSACTIVE时，调用该函数创建filter，挂上ppp->pass_filter或者active_filter。pass_filter和active_filter都会在ppp_send_frame，ppp_receive_nonmp_frame中使用BPF_PROG_RUN运行，返回值为0则前者通过，后者标记时间。
+#### drivers/net/ppp/pppgeneric.c :
 
-drivers/net/team/team_mode_loadbalance (lb_bpf_func_set)： 给team分配filter。使用在lb_get_skb_hash，该bpf程序被用来计算skb的哈希。
+1. ppp_init中调用register_chrdev注册ppp_device_fops，其中字段unlocked_ioctl指向ppp_ioctl。
+2. 当ppp_ioctl参数cmd为PPPIOCSPASS或PPPIOCSACTIVE时，调用bpf_prog_create创建filter，挂上ppp（由入参file直接转换而来）->pass_filter或者active_filter。
+3. pass_filter和active_filter都会在ppp_send_frame，ppp_receive_nonmp_frame中使用BPF_PROG_RUN运行，返回值为0则前者通过，后者标记时间。
 
-net/core/ptp_classifier.c (ptp_classifier_init)：初始化bpf_prog并且注册在全局变量上。该bpf_prog在ptp_classify_raw中被调用。
+#### drivers/net/team/team_mode_loadbalance.c：
+
+1. 在lb_init中，调用team_options_register注册lb_options，其中一个成员标明为BPF并封装了lb_bpf_func_get和lb_bpf_func_set。
+2. 在lb_bpf_func_set中调用__fprog_create，复制传入数据至fprog的filter字段，再调用bpf_prog_create创建bpf_prog，于fprog一并保存至team包含的lb_priv。
+3. 在lb_transmit中，该BPF程序被用来计算skb的哈希值。
+
+#### net/core/ptp_classifier.c (ptp_classifier_init)：
+
+初始化bpf_prog并且注册在全局变量上。该bpf_prog在ptp_classify_raw中被调用。
 
 ## bpf_prog_create_from_user(struct bpf_prog **pfp, struct sock_fprog *fprog, bpf_aux_classic_check_t trans, bool save_orig);
 
