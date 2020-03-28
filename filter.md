@@ -83,11 +83,29 @@ BPF JIT：
 2. 在lb_bpf_func_set中调用__fprog_create，复制传入数据至fprog的filter字段，再调用bpf_prog_create创建bpf_prog，于fprog一并保存至team包含的lb_priv。
 3. 在lb_transmit中，该BPF程序被用来计算skb的哈希值。
 
-#### net/core/ptp_classifier.c (ptp_classifier_init)：
+#### net/core/ptp_classifier.c：
 
-初始化bpf_prog并且注册在全局变量上。该bpf_prog在ptp_classify_raw中被调用。
+1. 在ptp_classifier_init中调用。初始化bpf_prog并且注册在全局变量上。
+2. 该bpf_prog在ptp_classify_raw中被调用。
 
-## bpf_prog_create_from_user(struct bpf_prog **pfp, struct sock_fprog *fprog, bpf_aux_classic_check_t trans, bool save_orig);
+#### net/netfilter/xt_bpf.c：
+
+1. 在bpf_mt_check和bpf_mt_check_v1中调到，两函数存在bpf_mt_reg。
+2. 在bpf_mt_init中会调用xt_register_matches注册bpf_mt_reg。与x_tables.c相关。
+
+#### net/sched/act_bpf.c：
+
+1. bpf_init_module中调用tcf_register_action注册act_bpf_ops，内含bpf_init_net和bpf_net_id。
+2. bpf_init_net接受一个net结构，调用tc_action_net_init注册act_bpf_ops。
+3. act_bpf_ops中有字段init为函数tcf_bpf_init，其中使用tcf_bpf_init_from_ops，其中调用bpf_prog_init。
+
+#### net/sched/cls_bpf.c：
+
+1. 类似上面的例子。cls_bpf_init_mod调用register_tcp_proto_ops注册cls_bpf_ops，其字段change为cls_bpf_change。
+2. cls_bpf_change中调到cls_bpf_set_parms，调到cls_bpf_prog_from_ops。
+
+
+## 2. bpf_prog_create_from_user(struct bpf_prog **pfp, struct sock_fprog *fprog, bpf_aux_classic_check_t trans, bool save_orig);
 
 ### 入参：
 
