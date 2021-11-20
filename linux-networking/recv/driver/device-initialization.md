@@ -132,3 +132,9 @@ After some pci specific setup, `driver_register()` is called, which in turn call
 After driver registered devices, `module_add_driver()` will add entries under /sys/module for the driver module.
 
 ### `e1000_probe()`
+
+This is the driver specific setup routine for E1000. Some standard pci hardware setup is done on the device. Then a new `struct net_device` is created with `alloc_etherdev()` with the size of a E1000 specific `struct e1000_adaptor`. `alloc_etherdev()` is a wrapper around `alloc_netdev_mqs()` with a ethernet specific `ether_setup()`.
+
+The initialization of `struct net_device` starts at the initialization of red-black trees of addresses. Then the device will be connected to the initial `struct net`. All the queues are initialized (most notably `struct netdev_queue`, which contains `struct Qdisc` and `struct xsk_buff_pool`, and `struct netdev_rx_queue`, which contains `struct xdp_rxq_info` and RPS information), then `ether_setup()`, `default_ethtool_ops` and netfilter hooks ingress and egress.
+
+`e1000_adaptor` is the private data portion of `struct net_device`. Memory mapped io is set up by standard pci functions. Then `e1000_init_hw_struct()` is called to initialize e1000 hardware, mac related operations.
