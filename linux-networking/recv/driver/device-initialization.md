@@ -137,4 +137,11 @@ This is the driver specific setup routine for E1000. Some standard pci hardware 
 
 The initialization of `struct net_device` starts at the initialization of red-black trees of addresses. Then the device will be connected to the initial `struct net`. All the queues are initialized (most notably `struct netdev_queue`, which contains `struct Qdisc` and `struct xsk_buff_pool`, and `struct netdev_rx_queue`, which contains `struct xdp_rxq_info` and RPS information), then `ether_setup()`, `default_ethtool_ops` and netfilter hooks ingress and egress.
 
-`e1000_adaptor` is the private data portion of `struct net_device`. Memory mapped io is set up by standard pci functions. Then `e1000_init_hw_struct()` is called to initialize e1000 hardware, mac related operations.
+`e1000_adaptor` is the private data portion of `struct net_device`. Memory mapped io is set up by standard pci functions. Then `e1000_init_hw_struct()` is called to initialize e1000 hardware, mac related operations. Then `netdev_ops` field is set to `e1000_netdev_ops`, which we will investigate further, and `ethtool_ops` is set to `e1000_ethtool_ops`. `netif_napi_add()` will initialize the `struct napi` embedded in `struct net_device` and register a driver specific poll function, which is
+`e1000_clean()`. `e1000_init_sw_struct()` is called to create a ring of `struct e1000_rx_ring` in private data, disable interrupt for the NIC device and set private states. Some very hardware specific setting is done and flushed.
+
+Eventually, the NIC is ready to accept traffic and `register_netdev()` is called to make the device officially available in the system.
+
+### `register_netdev()`
+
+`register_netdev()` is a `rtnl_lock` held version of `register_netdevice()`. Through `netdev_ops`, driver specific `ndo_init()` is called, which is nonexistent for E1000. A ifindex is allocated for the new network device. After some settings are checked and synced, message of device up is notified to the device's net and global net via `call_netdevice_notifiers()`. No function is registered by the driver yet, but devmap, fib and others might use it. The device entry in sysfs will be created. Then feature related device ops will be invoked if present, depending on the feature. `dev_init_scheduler()` will set up qdisc and tx, rx queue. Device registration is notified.
