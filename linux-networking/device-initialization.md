@@ -129,7 +129,7 @@ After some pci specific setup, `driver_register()` is called, which in turn call
 
 `driver_attach()` calls `bus_for_each_device` to iterate over all devices connected on the bus and attempts adding the device with `__driver_attach()`. A `match` function registered under `struct bus_type` will be called to check for the match between device and driver, in this case the `match` is `pci_bus_match()`, which then calls `pci_match_device()` to check that the device id is in the approved list. If matched, `__driver_attach()` will call `driver_probe_device()` to bind device and driver. `pinctl_bind_pins()` is called to bind device to pinctrl sybsystem. Bus `dma_configure()` is called to set up dma, which, for pci device, is `pci_dma_configure()`, which in turn calls either `of_dma_configure()` (for Open Firmware device) or `acpi_dma_configure()` (for acpi device). `driver_sysfs_add()` will add the sysfs entries for the driver. `call_driver_probe()` will invoke bus specific probe function `pci_device_probe()` and if failed, driver specific probe `e1000_probe()`, which sets up and initializes net device. `device_add_groups()` will create sysfs entries for the device. Then driver and device will be officially bound, and bus notifier will notify that the device is bound.
 
-After driver registered devices, `module_add_driver()` will add entries under /sys/module for the driver module.
+After driver registered devices, `module_add_driver()` will add entries under /sys/module for the driver module. 
 
 ### `e1000_probe()`
 
@@ -140,8 +140,10 @@ The initialization of `struct net_device` starts at the initialization of red-bl
 `e1000_adaptor` is the private data portion of `struct net_device`. Memory mapped io is set up by standard pci functions. Then `e1000_init_hw_struct()` is called to initialize e1000 hardware, mac related operations. Then `netdev_ops` field is set to `e1000_netdev_ops`, which we will investigate further, and `ethtool_ops` is set to `e1000_ethtool_ops`. `netif_napi_add()` will initialize the `struct napi` embedded in `struct net_device` and register a driver specific poll function, which is
 `e1000_clean()`. `e1000_init_sw_struct()` is called to create a ring of `struct e1000_rx_ring` in private data, disable interrupt for the NIC device and set private states. Some very hardware specific setting is done and flushed.
 
+Several work queues and delayed work queues are initialized. `watchdog_task` is initialized to use `e1000_watch()`, `phy_info_task` to `e1000_update_phy_info_task()`, `reset_task` to `e1000_reset_task()`.
+
 Eventually, the NIC is ready to accept traffic and `register_netdev()` is called to make the device officially available in the system.
 
 ### `register_netdev()`
 
-`register_netdev()` is a `rtnl_lock` held version of `register_netdevice()`. Through `netdev_ops`, driver specific `ndo_init()` is called, which is nonexistent for E1000. A ifindex is allocated for the new network device. After some settings are checked and synced, message of device up is notified to the device's net and global net via `call_netdevice_notifiers()`. No function is registered by the driver yet, but devmap, fib and others might use it. The device entry in sysfs will be created. Then feature related device ops will be invoked if present, depending on the feature. `dev_init_scheduler()` will set up qdisc and tx, rx queue. Device registration is notified.
+`register_netdev()` is a `rtnl_lock` held version of `register_netdevice()`. Through `netdev_ops`, driver specific `ndo_init()` is called, which is nonexistent for E1000. A ifindex is allocated for the new network device. After some settings are checked and synced, message of device up `NETDEV_POST_INIT` is notified to the device's net and global net via `call_netdevice_notifiers()`. No function is registered by the driver yet, but devmap, fib and others might use it. The device entry in sysfs will be created. Then feature related device ops will be invoked if present, depending on the feature. `dev_init_scheduler()` will set up qdisc, tx, rx queue and the watchdog, which has `dev_watchdog()` registered. Device registration is notified.
